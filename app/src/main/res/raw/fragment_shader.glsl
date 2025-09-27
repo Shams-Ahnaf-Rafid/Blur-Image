@@ -6,8 +6,8 @@ uniform vec2 u_resolution;
 uniform sampler2D u_Mask;
 uniform sampler2D u_Forest;
 uniform sampler2D u_Blur;
-uniform bool u_Remove;
-uniform bool u_Horizontal;
+uniform int u_Remove;
+uniform int u_Horizontal;
 uniform int u_Display;
 
 varying vec2 v_TexCoord;
@@ -21,7 +21,6 @@ vec4 gaussianBlur(sampler2D image, vec2 texCoord, vec2 direction, vec2 resolutio
     float w2 = 0.122649;
     float w3 = 0.092902;
     float w4 = 0.062084;
-
 
     vec4 result = texture2D(image, texCoord) * w0;
 
@@ -42,32 +41,26 @@ vec4 gaussianBlur(sampler2D image, vec2 texCoord, vec2 direction, vec2 resolutio
 
 void main() {
     if (u_Display == 2) {
-        //        float c = 0.007, d = 0.007;
-        //        vec4 sum = vec4(0.0);
-        //        for(float x = -c; x <= c; x += c){
-        //            for(float y = -d; y <= d; y += d){
-        //                sum += texture2D(u_Forest, v_TexCoord + vec2(x, y));
-        //            }
-        //        }
-        //        gl_FragColor = sum / 9.0;
-        if (u_Horizontal) {
+        // Blur operations
+        if (u_Horizontal == 1) {
             gl_FragColor = gaussianBlur(u_Forest, v_TexCoord, vec2(1.0, 0.0), u_resolution);
-        }
-        else {
+        } else {
             gl_FragColor = gaussianBlur(u_Blur, v_TexCoord, vec2(0.0, 1.0), u_resolution);
         }
-    }
-    else if (u_Display == 1) {
+    } else if (u_Display == 1) {
+        // Final display - texture coordinates are already aspect ratio corrected
         float a = texture2D(u_Mask, v_TexCoord).r;
         if (a == 0.0) {
             gl_FragColor = texture2D(u_Forest, v_TexCoord);
         } else {
             gl_FragColor = texture2D(u_Blur, v_TexCoord);
         }
-    }
-    else {
+    } else {
+        // Mask drawing operations - use original screen coordinates (no adjustment needed)
         vec2 fragPos = gl_FragCoord.xy;
 
+        // Convert normalized device coordinates to screen coordinates
+        // NO adjustment needed because mask drawing uses screen coordinates
         vec2 a = u_Points[0] * 0.5 + 0.5;
         vec2 b = u_Points[1] * 0.5 + 0.5;
 
@@ -83,14 +76,12 @@ void main() {
         float dist = length(fragPos - closest);
 
         if (dist <= u_Thickness * 0.5) {
-            if (u_Remove) {
-                gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+            if (u_Remove == 1) {
+                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); // Remove mask
+            } else {
+                gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); // Add mask
             }
-            else {
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-            }
-        }
-        else {
+        } else {
             gl_FragColor = texture2D(u_Mask, v_TexCoord);
         }
     }
