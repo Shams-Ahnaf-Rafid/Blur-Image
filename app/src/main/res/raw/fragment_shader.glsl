@@ -37,7 +37,7 @@ vec4 gaussianBlur(sampler2D image, vec2 texCoord, vec2 direction, vec2 resolutio
     result += texture2D(image, texCoord + offset * 4.0) * w4;
     result += texture2D(image, texCoord - offset * 4.0) * w4;
 
-    //result = (2.0 * texture2D(image, texCoord)) - result;
+//    result = (2.0 * texture2D(image, texCoord)) - result;
 
     return result;
 }

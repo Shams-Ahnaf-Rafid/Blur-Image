@@ -7,12 +7,12 @@ import android.graphics.Matrix
 import android.opengl.GLES20.*
 import android.opengl.GLUtils
 import android.opengl.GLSurfaceView
-import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+
 
 class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
