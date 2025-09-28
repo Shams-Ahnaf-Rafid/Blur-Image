@@ -23,7 +23,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var count = 0
     private var first = true
     private var touch = false
-    private var remove = 0 // 0 = add mask, 1 = remove mask
+    private var remove = 1
 
     private lateinit var Shader: ShaderProgram
 
@@ -38,23 +38,19 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val screenAspect = screenWidth.toFloat() / screenHeight
         val imageAspect = imageWidth.toFloat() / imageHeight
 
-        var adjustedX = x
-        var adjustedY = y
+        var adjustedX = x  / 0.9f
+        var adjustedY = y  / 0.9f
 
-        // Adjust for the aspect ratio correction that happens in vertex shader
         if (screenAspect > imageAspect) {
-            // Screen is wider than image - scale X coordinate
             adjustedX *= screenAspect / imageAspect
         } else {
-            // Screen is taller than image - scale Y coordinate
             adjustedY *= imageAspect / screenAspect
         }
 
-        return floatArrayOf(adjustedX, adjustedY)
+        return floatArrayOf(adjustedX , adjustedY)
     }
 
     fun setPoints(x0: Float, y0: Float, x1: Float, y1: Float) {
-        // Adjust touch points for aspect ratio
         val adjustedA = adjustTouchPoint(x0, y0)
         val adjustedB = adjustTouchPoint(x1, y1)
 
@@ -65,6 +61,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     fun click() {
         remove = (remove + 1) % 2
+    }
+
+    fun setBlurAmount (x: Float) {
+        drawToFBO(fboId[2], fgTextureId, horizontal = 1, display = 2, x)
+        drawToFBO(fboId[1], fboTextureId[2], horizontal = 0, display = 2, x)
     }
 
     private val quadVertices = floatArrayOf(
@@ -94,14 +95,13 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var aspectRatioHandle = 0
     private var imageAspectRatioHandle = 0
     private var displayVertexHandle = 0
+    private var intensityHandle = 0
 
     override fun onSurfaceCreated(unused: GL10?, config: EGLConfig?) {
-        ///glClearColor(1f, 1f, 1f, 1f)
 
         Shader = ShaderProgram(context, R.raw.vertex_shader, R.raw.fragment_shader)
         Shader.useProgram()
 
-        // Get attribute/uniform handles
         brushPosHandle = glGetAttribLocation(Shader.program, "a_Position")
         brushPointsHandle = glGetUniformLocation(Shader.program, "u_Points")
         brushThicknessHandle = glGetUniformLocation(Shader.program, "u_Thickness")
@@ -115,6 +115,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         aspectRatioHandle = glGetUniformLocation(Shader.program, "u_AspectRatio")
         imageAspectRatioHandle = glGetUniformLocation(Shader.program, "u_ImageAspectRatio")
         displayVertexHandle = glGetUniformLocation(Shader.program, "u_display")
+        intensityHandle = glGetUniformLocation(Shader.program, "u_Intensity")
 
         fgTextureId = loadTextureFromRes(R.drawable.background)
     }
@@ -135,13 +136,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glClear(GL_COLOR_BUFFER_BIT)
 
         if (first) {
-            // Initial blur setup
-            drawToFBO(fboId[2], fgTextureId, horizontal = 1, display = 2)
-            drawToFBO(fboId[1], fboTextureId[2], horizontal = 0, display = 2)
+            drawToFBO(fboId[2], fgTextureId, horizontal = 1, display = 2, 50f)
+            drawToFBO(fboId[1], fboTextureId[2], horizontal = 0, display = 2, 50f)
             first = false
         }
 
-        // Draw brush strokes to mask FBO
         glBindFramebuffer(GL_FRAMEBUFFER, fboId[0])
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -155,7 +154,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
             glUniform2fv(brushPointsHandle, 2, floatArrayOf(pointA[0], pointA[1], pointB[0], pointB[1]), 0)
             glUniform1f(brushThicknessHandle, 100f)
             glUniform2f(brushResolutionHandle, screenWidth.toFloat(), screenHeight.toFloat())
-            passAspectRatios(0) // Mask operations - no aspect ratio correction
+            passAspectRatios(0)
 
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, fboTextureId[0])
@@ -171,12 +170,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        // Draw final composite to screen
         Shader.useProgram()
         vertexBuffer.position(0)
         glEnableVertexAttribArray(brushPosHandle)
         glVertexAttribPointer(brushPosHandle, 2, GL_FLOAT, false, 8, vertexBuffer)
-        passAspectRatios(1) // Final display - with aspect ratio correction
+        passAspectRatios(1)
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, fboTextureId[0])
@@ -197,7 +195,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glDisable(GL_BLEND)
     }
 
-    private fun drawToFBO(fbo: Int, textureId: Int, horizontal: Int, display: Int) {
+    private fun drawToFBO(fbo: Int, textureId: Int, horizontal: Int, display: Int, intensity: Float) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo)
         glViewport(0, 0, screenWidth, screenHeight)
         glClearColor(0f, 0f, 0f, 0f)
@@ -209,23 +207,15 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glVertexAttribPointer(brushPosHandle, 2, GL_FLOAT, false, 8, vertexBuffer)
 
         glUniform1f(brushThicknessHandle, 100f)
+        glUniform1f(intensityHandle, intensity)
         glUniform2f(brushResolutionHandle, screenWidth.toFloat(), screenHeight.toFloat())
-        passAspectRatios(display) // Pass display mode for correct aspect ratio handling
+        passAspectRatios(display)
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, textureId)
 
-        when (display) {
-            2 -> {
-                // Blur operations
-                if (horizontal == 1) {
-                    glUniform1i(fgTexHandle, 0)
-                } else {
-                    glUniform1i(blurHandle, 0)
-                }
-            }
-            else -> glUniform1i(fgTexHandle, 0)
-        }
+        if (horizontal == 1) glUniform1i(fgTexHandle, 0)
+        else glUniform1i(blurHandle, 0)
 
         glUniform1i(horizontalHandle, horizontal)
         glUniform1i(displayHandle, display)
@@ -240,7 +230,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val imageAspect = imageWidth.toFloat() / imageHeight
         glUniform1f(aspectRatioHandle, screenAspect)
         glUniform1f(imageAspectRatioHandle, imageAspect)
-        glUniform1i(displayVertexHandle, display) // Pass display mode to vertex shader
+        glUniform1i(displayVertexHandle, display)
     }
 
     private fun setupFBO(width: Int, height: Int) {

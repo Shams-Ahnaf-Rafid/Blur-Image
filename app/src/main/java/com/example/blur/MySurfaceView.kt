@@ -50,4 +50,11 @@ class MyGLSurfaceView(context: Context) : GLSurfaceView(context) {
         requestRender()
     }
 
+    fun setBlurAmount(x: Float) {
+        queueEvent {
+            renderer.setBlurAmount(x)
+        }
+        requestRender()
+    }
+
 }
