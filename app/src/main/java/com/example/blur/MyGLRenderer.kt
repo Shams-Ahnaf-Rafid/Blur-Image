@@ -16,7 +16,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-
+//
 class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     private var fboId = IntArray(3)
