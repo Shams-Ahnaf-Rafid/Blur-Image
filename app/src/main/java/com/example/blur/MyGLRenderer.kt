@@ -8,6 +8,9 @@ import android.opengl.GLES20.*
 import android.opengl.GLUtils
 import android.opengl.GLSurfaceView
 import android.util.Log
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.segmentation.Segmentation
+import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -23,30 +26,113 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var count = 0
     private var first = true
     private var touch = false
-    private var remove = 0 // 0 = add mask, 1 = remove mask
+    private var remove = 1
 
     private lateinit var Shader: ShaderProgram
 
     private var fgTextureId = 0
+    private var maskTextureId = 0
     private var imageWidth = 1
     private var imageHeight = 1
 
     private var pointA = floatArrayOf(-2f, -2f)
     private var pointB = floatArrayOf(-2f, -2f)
 
+    private var brushPosHandle = 0
+    private var brushPointsHandle = 0
+    private var brushThicknessHandle = 0
+    private var brushResolutionHandle = 0
+    private var fgMaskHandle = 0
+    private var blurHandle = 0
+    private var horizontalHandle = 0
+    private var displayHandle = 0
+    private var removeHandle = 0
+    private var fgTexHandle = 0
+    private var aspectRatioHandle = 0
+    private var imageAspectRatioHandle = 0
+    private var displayVertexHandle = 0
+    private var intensityHandle = 0
+    private var mediapipeMaskHandle = 0
+
+    // ---- ML Kit Segmenter ----
+    val segmenter by lazy {
+        val options = SelfieSegmenterOptions.Builder()
+            .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE) // or STREAM_MODE for camera
+            .build()
+        Segmentation.getClient(options)
+    }
+
+    fun segmentWithMLKit(bitmap: Bitmap, onMaskReady: (Bitmap) -> Unit) {
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        segmenter.process(image)
+            .addOnSuccessListener { mask ->
+                val buffer = mask.buffer
+                val maskWidth = mask.width
+                val maskHeight = mask.height
+
+                buffer.rewind() // make sure we start at beginning
+
+                // Copy buffer values first
+                val floatBuffer = buffer.asFloatBuffer() // view buffer as floats
+                val confidenceValues = FloatArray(floatBuffer.remaining())
+                floatBuffer.get(confidenceValues)
+
+
+                // Log max confidence
+                val maxConfidence = confidenceValues.maxOrNull() ?: 0f
+                Log.d("MLKit", "Max mask confidence: $maxConfidence")
+
+                // Create pixels array
+                val pixels = IntArray(maskWidth * maskHeight)
+                for (i in confidenceValues.indices) {
+                    val confidence = confidenceValues[i]
+                    pixels[i] = if (confidence > 0.5f) 0xFFFFFFFF.toInt() else 0x00000000
+                }
+
+                val maskBitmap = Bitmap.createBitmap(pixels, maskWidth, maskHeight, Bitmap.Config.ARGB_8888)
+
+                // Scale to original image size
+                val scaledMask = Bitmap.createScaledBitmap(maskBitmap, bitmap.width, bitmap.height, true)
+                //maskBitmap.recycle() // recycle small mask
+
+                onMaskReady(scaledMask) // safely send mask to GL thread
+            }
+            .addOnFailureListener { e ->
+                e.printStackTrace()
+                Log.e("MLKit", "Segmentation failed", e)
+            }
+    }
+
+
+
+
+    fun updateMaskTexture(maskBitmap: Bitmap) {
+        if (maskTextureId == 0) {
+            val textures = IntArray(1)
+            glGenTextures(1, textures, 0)
+            maskTextureId = textures[0]
+        }
+
+        glBindTexture(GL_TEXTURE_2D, maskTextureId)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        GLUtils.texImage2D(GL_TEXTURE_2D, 0, maskBitmap, 0)
+        glBindTexture(GL_TEXTURE_2D, 0)
+    }
+
     private fun adjustTouchPoint(x: Float, y: Float): FloatArray {
         val screenAspect = screenWidth.toFloat() / screenHeight
         val imageAspect = imageWidth.toFloat() / imageHeight
 
-        var adjustedX = x
-        var adjustedY = y
+        var adjustedX = x / 0.9f
+        var adjustedY = y / 0.9f
 
-        // Adjust for the aspect ratio correction that happens in vertex shader
         if (screenAspect > imageAspect) {
-            // Screen is wider than image - scale X coordinate
             adjustedX *= screenAspect / imageAspect
         } else {
-            // Screen is taller than image - scale Y coordinate
             adjustedY *= imageAspect / screenAspect
         }
 
@@ -54,7 +140,6 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
     }
 
     fun setPoints(x0: Float, y0: Float, x1: Float, y1: Float) {
-        // Adjust touch points for aspect ratio
         val adjustedA = adjustTouchPoint(x0, y0)
         val adjustedB = adjustTouchPoint(x1, y1)
 
@@ -65,6 +150,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     fun click() {
         remove = (remove + 1) % 2
+    }
+
+    fun setBlurAmount(x: Float) {
+        drawToFBO(fboId[2], fgTextureId, horizontal = 1, display = 2, x)
+        drawToFBO(fboId[1], fboTextureId[2], horizontal = 0, display = 2, x)
     }
 
     private val quadVertices = floatArrayOf(
@@ -81,27 +171,10 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         .put(quadVertices)
         .apply { position(0) }
 
-    private var brushPosHandle = 0
-    private var brushPointsHandle = 0
-    private var brushThicknessHandle = 0
-    private var brushResolutionHandle = 0
-    private var fgMaskHandle = 0
-    private var blurHandle = 0
-    private var horizontalHandle = 0
-    private var displayHandle = 0
-    private var removeHandle = 0
-    private var fgTexHandle = 0
-    private var aspectRatioHandle = 0
-    private var imageAspectRatioHandle = 0
-    private var displayVertexHandle = 0
-
     override fun onSurfaceCreated(unused: GL10?, config: EGLConfig?) {
-        ///glClearColor(1f, 1f, 1f, 1f)
-
         Shader = ShaderProgram(context, R.raw.vertex_shader, R.raw.fragment_shader)
         Shader.useProgram()
 
-        // Get attribute/uniform handles
         brushPosHandle = glGetAttribLocation(Shader.program, "a_Position")
         brushPointsHandle = glGetUniformLocation(Shader.program, "u_Points")
         brushThicknessHandle = glGetUniformLocation(Shader.program, "u_Thickness")
@@ -115,7 +188,9 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         aspectRatioHandle = glGetUniformLocation(Shader.program, "u_AspectRatio")
         imageAspectRatioHandle = glGetUniformLocation(Shader.program, "u_ImageAspectRatio")
         displayVertexHandle = glGetUniformLocation(Shader.program, "u_display")
-
+        intensityHandle = glGetUniformLocation(Shader.program, "u_Intensity")
+        mediapipeMaskHandle = glGetUniformLocation(Shader.program, "u_MLMask")
+        Log.d("Check", "u_MLMask handle=$mediapipeMaskHandle")
         fgTextureId = loadTextureFromRes(R.drawable.background)
     }
 
@@ -135,13 +210,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glClear(GL_COLOR_BUFFER_BIT)
 
         if (first) {
-            // Initial blur setup
-            drawToFBO(fboId[2], fgTextureId, horizontal = 1, display = 2)
-            drawToFBO(fboId[1], fboTextureId[2], horizontal = 0, display = 2)
+            drawToFBO(fboId[2], fgTextureId, horizontal = 1, display = 2, 50f)
+            drawToFBO(fboId[1], fboTextureId[2], horizontal = 0, display = 2, 50f)
             first = false
         }
 
-        // Draw brush strokes to mask FBO
         glBindFramebuffer(GL_FRAMEBUFFER, fboId[0])
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -155,7 +228,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
             glUniform2fv(brushPointsHandle, 2, floatArrayOf(pointA[0], pointA[1], pointB[0], pointB[1]), 0)
             glUniform1f(brushThicknessHandle, 100f)
             glUniform2f(brushResolutionHandle, screenWidth.toFloat(), screenHeight.toFloat())
-            passAspectRatios(0) // Mask operations - no aspect ratio correction
+            passAspectRatios(0)
 
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, fboTextureId[0])
@@ -171,12 +244,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-        // Draw final composite to screen
         Shader.useProgram()
         vertexBuffer.position(0)
         glEnableVertexAttribArray(brushPosHandle)
         glVertexAttribPointer(brushPosHandle, 2, GL_FLOAT, false, 8, vertexBuffer)
-        passAspectRatios(1) // Final display - with aspect ratio correction
+        passAspectRatios(1)
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, fboTextureId[0])
@@ -190,6 +262,14 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glBindTexture(GL_TEXTURE_2D, fboTextureId[1])
         glUniform1i(blurHandle, 2)
 
+        // Bind ML Kit mask if available
+        if (maskTextureId != 0) {
+            Log.d("Check", "$maskTextureId")
+            glActiveTexture(GL_TEXTURE3)
+            glBindTexture(GL_TEXTURE_2D, maskTextureId)
+            glUniform1i(mediapipeMaskHandle, 3)
+        }
+
         glUniform1i(displayHandle, 1)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
 
@@ -197,7 +277,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glDisable(GL_BLEND)
     }
 
-    private fun drawToFBO(fbo: Int, textureId: Int, horizontal: Int, display: Int) {
+    private fun drawToFBO(fbo: Int, textureId: Int, horizontal: Int, display: Int, intensity: Float) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo)
         glViewport(0, 0, screenWidth, screenHeight)
         glClearColor(0f, 0f, 0f, 0f)
@@ -209,23 +289,15 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glVertexAttribPointer(brushPosHandle, 2, GL_FLOAT, false, 8, vertexBuffer)
 
         glUniform1f(brushThicknessHandle, 100f)
+        glUniform1f(intensityHandle, intensity)
         glUniform2f(brushResolutionHandle, screenWidth.toFloat(), screenHeight.toFloat())
-        passAspectRatios(display) // Pass display mode for correct aspect ratio handling
+        passAspectRatios(display)
 
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, textureId)
 
-        when (display) {
-            2 -> {
-                // Blur operations
-                if (horizontal == 1) {
-                    glUniform1i(fgTexHandle, 0)
-                } else {
-                    glUniform1i(blurHandle, 0)
-                }
-            }
-            else -> glUniform1i(fgTexHandle, 0)
-        }
+        if (horizontal == 1) glUniform1i(fgTexHandle, 0)
+        else glUniform1i(blurHandle, 0)
 
         glUniform1i(horizontalHandle, horizontal)
         glUniform1i(displayHandle, display)
@@ -240,7 +312,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val imageAspect = imageWidth.toFloat() / imageHeight
         glUniform1f(aspectRatioHandle, screenAspect)
         glUniform1f(imageAspectRatioHandle, imageAspect)
-        glUniform1i(displayVertexHandle, display) // Pass display mode to vertex shader
+        glUniform1i(displayVertexHandle, display)
     }
 
     private fun setupFBO(width: Int, height: Int) {
@@ -287,5 +359,9 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         flipped.recycle()
 
         return textures[0]
+    }
+
+    fun cleanup() {
+        // ML Kit client does not need manual close
     }
 }
