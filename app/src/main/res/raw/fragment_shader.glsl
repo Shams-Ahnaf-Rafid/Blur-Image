@@ -4,9 +4,9 @@ uniform float u_Thickness;
 uniform vec2 u_Points[2];
 uniform vec2 u_resolution;
 uniform sampler2D u_Mask;
-uniform sampler2D u_MLMask;
 uniform sampler2D u_Forest;
 uniform sampler2D u_Blur;
+uniform sampler2D u_MLMask;
 uniform bool u_Remove;
 uniform bool u_Horizontal;
 uniform int u_Display;
@@ -44,7 +44,12 @@ vec4 gaussianBlur(sampler2D image, vec2 texCoord, vec2 direction, vec2 resolutio
 }
 
 void main() {
-    if (u_Display == 2) {
+
+
+    if (u_Display == 3) {
+        gl_FragColor = vec4(1.0-texture2D(u_MLMask, v_TexCoord).r, 0.0, 0.0, 1.0);
+    }
+    else if (u_Display == 2) {
         if (u_Horizontal) {
             gl_FragColor = gaussianBlur(u_Forest, v_TexCoord, vec2(1.0, 0.0), u_resolution);
         }
@@ -53,10 +58,9 @@ void main() {
         }
     }
     else if (u_Display == 1) {
-        float a = texture2D(u_MLMask, v_TexCoord).r;
-        if (a == 1.0) gl_FragColor = texture2D(u_Forest, v_TexCoord);
-        else gl_FragColor = texture2D(u_Blur, v_TexCoord);
-        //else gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        vec4 blur = texture2D(u_Blur, v_TexCoord);;
+        vec4 original = texture2D(u_Forest, v_TexCoord);
+        gl_FragColor = mix(original, blur, texture2D(u_Mask, v_TexCoord).r);
     }
     else {
         vec2 fragPos = gl_FragCoord.xy;
@@ -75,12 +79,18 @@ void main() {
 
         float dist = length(fragPos - closest);
 
-        if (dist <= u_Thickness * 0.5) {
+        float inner = u_Thickness * 0.5;
+        float outer = u_Thickness;
+
+        float alpha = 1.0 - smoothstep(inner, outer, dist);
+
+
+        if (dist <= u_Thickness) {
             if (u_Remove) {
-                gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+                gl_FragColor = vec4(max(texture2D(u_Mask, v_TexCoord).r, alpha), 0.0, 0.0, 1.0);
             }
             else {
-                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                gl_FragColor = vec4(min(texture2D(u_Mask, v_TexCoord).r, 1.0-alpha), 0.0, 0.0, 1.0);
             }
         }
         else {
@@ -88,3 +98,4 @@ void main() {
         }
     }
 }
+

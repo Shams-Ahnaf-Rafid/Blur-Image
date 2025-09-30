@@ -15,7 +15,7 @@ void main() {
         } else {
             pos.y *= u_AspectRatio / u_ImageAspectRatio;
         }
-        pos *= 0.9;
+        pos *= 1.2;
     }
 
     gl_Position = vec4(pos, 0.0, 1.0);

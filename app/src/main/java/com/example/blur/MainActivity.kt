@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -14,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 
 class MainActivity : ComponentActivity() {
 
@@ -37,10 +39,8 @@ fun DrawingScreen() {
     var toggleState by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        // Load original bitmap
-        val bitmap = BitmapFactory.decodeResource(context.resources, R.drawable.background)
+        val bitmap = BitmapFactory.decodeResource(context.resources, R.drawable.people1)
 
-        // Optionally scale down for ML Kit to improve speed
         val scaledInput = Bitmap.createScaledBitmap(bitmap, 480, 640, true)
 
         myGLSurfaceView.renderer.segmentWithMLKit(scaledInput) { mask ->
@@ -52,9 +52,6 @@ fun DrawingScreen() {
             }
         }
     }
-
-
-
 
     Column(modifier = Modifier.fillMaxSize()) {
         AndroidView(
@@ -89,19 +86,28 @@ fun DrawingScreen() {
             )
         }
 
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(Color(0xFF110E0E))
                 .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalArrangement = Arrangement.SpaceEvenly, // space buttons evenly
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Button(onClick = {
                 toggleState = !toggleState
                 myGLSurfaceView.click()
             }) {
-                Text(if (toggleState) "Unblur" else "Blur")
+                Text(if (toggleState) "Blur" else "Unblur")
+            }
+
+            Button(onClick = {
+                myGLSurfaceView.autoClick()
+            }) {
+                Text("Auto")
             }
         }
+
     }
 }
 
@@ -118,4 +124,3 @@ fun logMaskPixels(mask: Bitmap) {
         android.util.Log.d("MLMask", row)
     }
 }
-//comment

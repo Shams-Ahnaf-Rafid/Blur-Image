@@ -16,7 +16,7 @@ import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-//
+
 class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     private var fboId = IntArray(3)
@@ -27,6 +27,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var first = true
     private var touch = false
     private var remove = 1
+    private var auto = true
 
     private lateinit var Shader: ShaderProgram
 
@@ -52,12 +53,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var imageAspectRatioHandle = 0
     private var displayVertexHandle = 0
     private var intensityHandle = 0
-    private var mediapipeMaskHandle = 0
+    private var mlMaskHandle = 0
 
-    // ---- ML Kit Segmenter ----
     val segmenter by lazy {
         val options = SelfieSegmenterOptions.Builder()
-            .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE) // or STREAM_MODE for camera
+            .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
             .build()
         Segmentation.getClient(options)
     }
@@ -71,19 +71,15 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
                 val maskWidth = mask.width
                 val maskHeight = mask.height
 
-                buffer.rewind() // make sure we start at beginning
+                buffer.rewind()
 
-                // Copy buffer values first
-                val floatBuffer = buffer.asFloatBuffer() // view buffer as floats
+                val floatBuffer = buffer.asFloatBuffer()
                 val confidenceValues = FloatArray(floatBuffer.remaining())
                 floatBuffer.get(confidenceValues)
 
-
-                // Log max confidence
                 val maxConfidence = confidenceValues.maxOrNull() ?: 0f
                 Log.d("MLKit", "Max mask confidence: $maxConfidence")
 
-                // Create pixels array
                 val pixels = IntArray(maskWidth * maskHeight)
                 for (i in confidenceValues.indices) {
                     val confidence = confidenceValues[i]
@@ -91,12 +87,9 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
                 }
 
                 val maskBitmap = Bitmap.createBitmap(pixels, maskWidth, maskHeight, Bitmap.Config.ARGB_8888)
-
-                // Scale to original image size
                 val scaledMask = Bitmap.createScaledBitmap(maskBitmap, bitmap.width, bitmap.height, true)
-                //maskBitmap.recycle() // recycle small mask
 
-                onMaskReady(scaledMask) // safely send mask to GL thread
+                onMaskReady(scaledMask)
             }
             .addOnFailureListener { e ->
                 e.printStackTrace()
@@ -104,8 +97,31 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
             }
     }
 
+    private fun copyMLMaskToUMask() {
+        if (maskTextureId == 0) return
 
+        glBindFramebuffer(GL_FRAMEBUFFER, fboId[0])
+        glViewport(0, 0, screenWidth, screenHeight)
+        glClearColor(0f, 0f, 0f, 0f)
+        glClear(GL_COLOR_BUFFER_BIT)
 
+        Shader.useProgram()
+        vertexBuffer.position(0)
+        glEnableVertexAttribArray(brushPosHandle)
+        glVertexAttribPointer(brushPosHandle, 2, GL_FLOAT, false, 8, vertexBuffer)
+
+        passAspectRatios(0)
+
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, maskTextureId)   // ML mask texture
+        glUniform1i(mlMaskHandle, 0)                  // bind as source
+
+        glUniform1i(displayHandle, 3)                 // mode 3 = ML mask
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+
+        glDisableVertexAttribArray(brushPosHandle)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+    }
 
     fun updateMaskTexture(maskBitmap: Bitmap) {
         if (maskTextureId == 0) {
@@ -127,8 +143,8 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val screenAspect = screenWidth.toFloat() / screenHeight
         val imageAspect = imageWidth.toFloat() / imageHeight
 
-        var adjustedX = x / 0.9f
-        var adjustedY = y / 0.9f
+        var adjustedX = x / 1.2f
+        var adjustedY = y / 1.2f
 
         if (screenAspect > imageAspect) {
             adjustedX *= screenAspect / imageAspect
@@ -150,6 +166,10 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     fun click() {
         remove = (remove + 1) % 2
+    }
+
+    fun autoClick() {
+        auto = true
     }
 
     fun setBlurAmount(x: Float) {
@@ -189,9 +209,9 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         imageAspectRatioHandle = glGetUniformLocation(Shader.program, "u_ImageAspectRatio")
         displayVertexHandle = glGetUniformLocation(Shader.program, "u_display")
         intensityHandle = glGetUniformLocation(Shader.program, "u_Intensity")
-        mediapipeMaskHandle = glGetUniformLocation(Shader.program, "u_MLMask")
-        Log.d("Check", "u_MLMask handle=$mediapipeMaskHandle")
-        fgTextureId = loadTextureFromRes(R.drawable.background)
+        mlMaskHandle = glGetUniformLocation(Shader.program, "u_MLMask")
+
+        fgTextureId = loadTextureFromRes(R.drawable.people1)
     }
 
     override fun onSurfaceChanged(unused: GL10?, width: Int, height: Int) {
@@ -226,7 +246,7 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
             glVertexAttribPointer(brushPosHandle, 2, GL_FLOAT, false, 8, vertexBuffer)
 
             glUniform2fv(brushPointsHandle, 2, floatArrayOf(pointA[0], pointA[1], pointB[0], pointB[1]), 0)
-            glUniform1f(brushThicknessHandle, 100f)
+            glUniform1f(brushThicknessHandle, 80f)
             glUniform2f(brushResolutionHandle, screenWidth.toFloat(), screenHeight.toFloat())
             passAspectRatios(0)
 
@@ -243,6 +263,11 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+        if (auto) {
+            copyMLMaskToUMask()
+            auto = false
+        }
 
         Shader.useProgram()
         vertexBuffer.position(0)
@@ -262,16 +287,9 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         glBindTexture(GL_TEXTURE_2D, fboTextureId[1])
         glUniform1i(blurHandle, 2)
 
-        // Bind ML Kit mask if available
-        if (maskTextureId != 0) {
-            Log.d("Check", "$maskTextureId")
-            glActiveTexture(GL_TEXTURE3)
-            glBindTexture(GL_TEXTURE_2D, maskTextureId)
-            glUniform1i(mediapipeMaskHandle, 3)
-        }
-
         glUniform1i(displayHandle, 1)
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+
 
         glDisableVertexAttribArray(brushPosHandle)
         glDisable(GL_BLEND)
@@ -361,7 +379,4 @@ class MyGLRenderer(private val context: Context) : GLSurfaceView.Renderer {
         return textures[0]
     }
 
-    fun cleanup() {
-        // ML Kit client does not need manual close
-    }
 }
